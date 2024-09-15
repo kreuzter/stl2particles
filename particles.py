@@ -1,16 +1,19 @@
 import numpy as np
-import vtk
 from scipy.sparse import dok_matrix as sparse_mat
 
 import auxiliaryFunctions as aux
 
 name = 'sifon'
 path = 'data/sifon_dp0-005_geo.stl'
+writeOutput = False
+maxMinSize = np.array([50e-3, 1e-3])
+gmshGui=False
 
 old_nodeTags, nodeCoords, _, old_elemTags, old_elemNodeTags = aux.remeshSTL(path,
-                                                                 5e-3,
-                                                                 1e-3,
-                                                                name)
+                                                                maxMinSize.max(),
+                                                                maxMinSize.min(),
+                                                                name,
+                                                                gmshGui)
 
 numParticles = len(old_nodeTags)
 numElements  = np.sum([len(el) for el in old_elemTags])
@@ -60,58 +63,19 @@ for elemIdx in range(numElements):
                     elemNodesCoords[2] - elemNodesCoords[0] )  
   globalElemNormals[elemIdx] = normal/np.linalg.norm(normal)
   globalElemAreas[elemIdx] = aux.poly_area(elemNodesCoords)
+
 # From element properties compute particle properties
 
 particleAreas = connectionMatrix.dot(globalElemAreas/numberOfNodesOnElement)
-#np.dot(globalElemAreas/numberOfNodesOnElement, connectionMatrix)
 
 print(f'total area of elements:  {np.sum(globalElemAreas)}')
 print(f'total area of particles: {np.sum(particleAreas)  }')
 
-normals = np.zeros((len(particleAreas), 3))
+particleNormals = np.zeros((len(particleAreas), 3))
 for i in [0,1,2]:
-  normals[:,i] = connectionMatrix.dot(np.multiply(globalElemAreas, globalElemNormals[:,i]))
-
-
-for i in range(len(particleAreas)):
-  normals[i,:] = normals[i,:]/np.linalg.norm(normals[i,:])
-
-# Create and write to VTK
-
-writer = vtk.vtkPolyDataWriter()
-writer.SetFileName('data/'+name+'.vtk')
-
-vPoints = vtk.vtkPoints()
-vPoints.SetNumberOfPoints(len(particleAreas))
-for i in range(len(particleAreas)):
-  vPoints.SetPoint(i, nodeCoords[i,:])
-
-vpoly = vtk.vtkPolyData()
-vpoly.SetPoints(vPoints)
-
-vNormal = vtk.vtkFloatArray()
-vNormal.SetNumberOfComponents(3)
-vNormal.SetName('normals')
-vNormal.SetNumberOfTuples(len(particleAreas))
+  particleNormals[:,i] = connectionMatrix.dot(np.multiply(globalElemAreas, globalElemNormals[:,i]))
 
 for i in range(len(particleAreas)):
-  vNormal.SetTuple3(i, normals[i,0], normals[i,1], normals[i,2])
+  particleNormals[i,:] = particleNormals[i,:]/np.linalg.norm(particleNormals[i,:])
 
-vpoly.GetPointData().AddArray(vNormal)
-
-vArea = vtk.vtkFloatArray()
-vArea.SetNumberOfComponents(1)
-vArea.SetName('Areas')
-vArea.SetNumberOfTuples(len(particleAreas))
-
-for i in range(len(particleAreas)):
-  vArea.SetTuple1(i, particleAreas[i])
-
-vpoly.GetPointData().AddArray(vArea)
-
-writer.SetInputData(vpoly)
-writer.SetFileTypeToBinary()
-writer.Update()
-#writer.Write()
-
-
+if writeOutput: aux.writeVTK(name, nodeCoords, particleAreas, particleNormals)

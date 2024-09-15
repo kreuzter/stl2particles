@@ -48,7 +48,7 @@ def poly_area(poly):
     '''
     #shape (N, 3)
     if isinstance(poly, list):
-        poly = np.array(poly)
+      poly = np.array(poly)
     #all edges
     edges = poly[1:] - poly[0:1]
     # row wise cross product

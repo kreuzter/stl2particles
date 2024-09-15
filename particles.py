@@ -1,5 +1,6 @@
 import numpy as np
 import vtk
+from scipy.sparse import dok_matrix as sparse_mat
 
 import auxiliaryFunctions as aux
 
@@ -7,71 +8,64 @@ name = 'sifon'
 path = 'data/sifon_dp0-005_geo.stl'
 
 nodeTags, nodeCoords, elemTypes, elemTags, elemNodeTags = aux.remeshSTL(path,
-                                                                        50e-3,
-                                                                        1e-3,
+                                                                        10e-3,
+                                                                         1e-3,
                                                                         name)
 
-nodeCoords = nodeCoords.reshape((int(len(nodeCoords)/3),3))
-elemNums = np.empty(len(elemTypes), dtype=int)
+numberOfNodesOnElement = np.ones(len(elemTags[0]))*(len(elemNodeTags[0])/len(elemTags[0]))
 
+for i in range(1,len(elemNodeTags)):
+  numberOfNodesOnElement = np.append(
+    numberOfNodesOnElement,
+    np.ones(len(elemTags[i]))*(len(elemNodeTags[i])/len(elemTags[i]))
+    )
+numberOfNodesOnElement = numberOfNodesOnElement.astype(int)
+
+startOfElemNodesTags = np.cumsum(numberOfNodesOnElement)
+startOfElemNodesTags = np.append(0,startOfElemNodesTags[:-1])
+endOfElemNodesTags = startOfElemNodesTags+numberOfNodesOnElement
+
+nodeCoords = nodeCoords.reshape((int(len(nodeCoords)/3),3))
 globalElemTags = np.concatenate(elemTags).ravel()
-globalElemAreas = np.zeros(len(globalElemTags))
+globalElemNodeTags = np.concatenate(elemNodeTags).ravel()
+
+globalElemAreas   = np.zeros( len(globalElemTags)    )
 globalElemNormals = np.zeros((len(globalElemTags), 3))
 
-for i in range(len(elemTypes)):
-  el_numNodes = len(elemNodeTags[i])/len(elemTags[i])
-  if not el_numNodes.is_integer(): 
-    print('Something went wrong.')
-  else: elemNums[i] = int(el_numNodes)
+connectionMatrix =  sparse_mat((len(nodeTags), len(globalElemTags)), dtype=bool)
 
-globalElemNodeTags = np.ones((0, elemNums.max()), dtype=int)
-
-for i in range(len(elemTypes)):
-  temp_elemNodeTags = elemNodeTags[i].reshape((
-    int(len(elemTags[i])),
-     elemNums[i]
-     ))
-  
-  if elemNums[i] < elemNums.max():
-    temp_add = -1*np.ones((len(elemTags[i]), elemNums.max() - elemNums[i]))
-    temp_elemNodeTags = np.hstack((temp_elemNodeTags, temp_add))
-  
-  globalElemNodeTags = np.vstack((globalElemNodeTags, temp_elemNodeTags))
-
-connectionMatrix = np.zeros((len(globalElemTags), len(nodeTags)), dtype=int)
+# np.zeros((len(globalElemTags), len(nodeTags)), dtype=bool)
 for elemIdx in range(len(globalElemTags)):
-  for nodeTag in globalElemNodeTags[elemIdx]:
-    if nodeTag == -1: pass
-    else:
-      connectionMatrix[elemIdx, np.where(nodeTags==nodeTag)[0][0]] = True
+  first = startOfElemNodesTags[elemIdx]
+  last = endOfElemNodesTags[elemIdx]
+  tags = globalElemNodeTags[first:last]
 
-numberOfNodesOnElement = np.sum(connectionMatrix, axis=1)
+  for nodeTag in tags:
+    connectionMatrix[ np.where(nodeTags==nodeTag)[0][0], elemIdx] = True
 
-for elemIdx in range(len(globalElemTags)):
-  elemTag = globalElemTags[elemIdx]
-  elemNodesTags = globalElemNodeTags[elemIdx, :]
-  temp_index = np.argwhere(elemNodesTags==-1)
-  elemNodesTags = np.delete(elemNodesTags, temp_index)
-  elemNodesIdxs = [ np.where(elemNode == nodeTags)[0][0] for elemNode in (elemNodesTags)]
+  elemNodesIdxs = [ np.where(elemNode == nodeTags)[0][0] for elemNode in (tags)]
   elemNodesCoords = nodeCoords[elemNodesIdxs]
   normal = np.cross( elemNodesCoords[1] - elemNodesCoords[0],
                     elemNodesCoords[2] - elemNodesCoords[0] )  
   globalElemNormals[elemIdx] = normal/np.linalg.norm(normal)
   globalElemAreas[elemIdx] = aux.poly_area(elemNodesCoords)
+# From element properties compute particle properties
 
-particleAreas = np.dot(globalElemAreas/numberOfNodesOnElement, connectionMatrix)
+particleAreas = connectionMatrix.dot(globalElemAreas/numberOfNodesOnElement)
+#np.dot(globalElemAreas/numberOfNodesOnElement, connectionMatrix)
 
 print(f'total area of elements:  {np.sum(globalElemAreas)}')
 print(f'total area of particles: {np.sum(particleAreas)  }')
 
 normals = np.zeros((len(particleAreas), 3))
 for i in [0,1,2]:
-  normals[:,i] =  np.dot(
-    np.multiply(globalElemAreas, globalElemNormals[:,i]), connectionMatrix
-    )
+  normals[:,i] = connectionMatrix.dot(np.multiply(globalElemAreas, globalElemNormals[:,i]))
+
 
 for i in range(len(particleAreas)):
   normals[i,:] = normals[i,:]/np.linalg.norm(normals[i,:])
+
+# Create and write to VTK
 
 writer = vtk.vtkPolyDataWriter()
 writer.SetFileName('data/'+name+'.vtk')
@@ -104,10 +98,9 @@ for i in range(len(particleAreas)):
 
 vpoly.GetPointData().AddArray(vArea)
 
-
 writer.SetInputData(vpoly)
 writer.SetFileTypeToBinary()
 writer.Update()
-writer.Write()
+#writer.Write()
 
 
